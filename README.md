@@ -1,3 +1,10 @@
+TEAM INFO:
+K.SRI CHANDAN(24BDS034)
+S.ABHINAV SAI CHANDRA(24BDS070)
+S.VARUN (24BDS071)
+SHAIK SAMEER(24BDS074)
+K.JASWANTH REDDY(24BDS028)
+--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 AI Semester Project – Full-Stack Web + Python AI Backend
 
 This project is a full-stack AI-powered web application built as part of a semester course project.
