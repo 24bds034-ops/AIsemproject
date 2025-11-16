@@ -16,23 +16,101 @@ const openai = new OpenAI(
 );
 
 export const getConversation = query({
-  args: {},
-  handler: async (ctx): Promise<any | null> => {
+  args: {
+    conversationId: v.optional(v.id("conversations")),
+  },
+  handler: async (ctx, args): Promise<any | null> => {
     const userId = await getAuthUserId(ctx);
     if (!userId) return null;
 
+    if (args.conversationId) {
+      const conversation = await ctx.db.get(args.conversationId);
+      if (conversation && conversation.userId === userId) {
+        return conversation;
+      }
+      return null;
+    }
+
+    // If no conversationId provided, get the most recent conversation
     const conversation = await ctx.db
       .query("conversations")
-      .withIndex("by_user", (q) => q.eq("userId", userId))
+      .withIndex("by_user_updated", (q) => q.eq("userId", userId))
+      .order("desc")
       .first();
 
     return conversation;
   },
 });
 
+export const getAllConversations = query({
+  args: {},
+  handler: async (ctx) => {
+    const userId = await getAuthUserId(ctx);
+    if (!userId) return [];
+
+    const conversations = await ctx.db
+      .query("conversations")
+      .withIndex("by_user", (q) => q.eq("userId", userId))
+      .collect();
+
+    // Sort by updatedAt if available, otherwise by creation order
+    const sorted = conversations.sort((a, b) => {
+      const aTime = a.updatedAt || a.createdAt || 0;
+      const bTime = b.updatedAt || b.createdAt || 0;
+      return bTime - aTime;
+    });
+
+    return sorted.map(conv => ({
+      _id: conv._id,
+      title: conv.title || "New Chat",
+      updatedAt: conv.updatedAt || conv.createdAt || Date.now(),
+      createdAt: conv.createdAt || Date.now(),
+    }));
+  },
+});
+
+export const createConversation = mutation({
+  args: {
+    title: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const userId = await getAuthUserId(ctx);
+    if (!userId) throw new Error("Not authenticated");
+
+    const now = Date.now();
+    const title = args.title || "New Chat";
+
+    const conversationId = await ctx.db.insert("conversations", {
+      userId,
+      title,
+      messages: [],
+      createdAt: now,
+      updatedAt: now,
+    });
+
+    return conversationId;
+  },
+});
+
+export const deleteConversation = mutation({
+  args: {
+    conversationId: v.id("conversations"),
+  },
+  handler: async (ctx, args) => {
+    const userId = await getAuthUserId(ctx);
+    if (!userId) throw new Error("Not authenticated");
+
+    const conversation = await ctx.db.get(args.conversationId);
+    if (conversation && conversation.userId === userId) {
+      await ctx.db.delete(args.conversationId);
+    }
+  },
+});
+
 export const sendMessage = mutation({
   args: {
     content: v.string(),
+    conversationId: v.optional(v.id("conversations")),
   },
   handler: async (ctx, args) => {
     const userId = await getAuthUserId(ctx);
@@ -48,24 +126,46 @@ export const sendMessage = mutation({
       timestamp,
     };
 
-    let conversation = await ctx.db
-      .query("conversations")
-      .withIndex("by_user", (q) => q.eq("userId", userId))
-      .first();
+    let conversation: any = null;
 
-    if (!conversation) {
-      await ctx.db.insert("conversations", {
-        userId,
-        messages: [userMessage],
-      });
+    if (args.conversationId) {
+      conversation = await ctx.db.get(args.conversationId);
+      if (!conversation || conversation.userId !== userId) {
+        throw new Error("Conversation not found");
+      }
     } else {
-      const updatedMessages = [...conversation.messages, userMessage];
-      await ctx.db.patch(conversation._id, {
-        messages: updatedMessages,
-      });
+      // Get most recent conversation or create new one
+      conversation = await ctx.db
+        .query("conversations")
+        .withIndex("by_user_updated", (q) => q.eq("userId", userId))
+        .order("desc")
+        .first();
     }
 
-    return messageId;
+    if (!conversation) {
+      const now = Date.now();
+      const title = args.content.length > 50 ? args.content.substring(0, 50) + "..." : args.content;
+      const conversationId = await ctx.db.insert("conversations", {
+        userId,
+        title,
+        messages: [userMessage],
+        createdAt: now,
+        updatedAt: now,
+      });
+      return { messageId, conversationId };
+    } else {
+      const updatedMessages = [...conversation.messages, userMessage];
+      const title = conversation.title === "New Chat" && args.content.length <= 50
+        ? args.content
+        : conversation.title;
+
+      await ctx.db.patch(conversation._id, {
+        messages: updatedMessages,
+        updatedAt: timestamp,
+        title,
+      });
+      return { messageId, conversationId: conversation._id };
+    }
   },
 });
 
@@ -73,6 +173,7 @@ export const getMedicineInfo = action({
   args: {
     medicine: v.string(),
     quickAction: v.optional(v.string()),
+    conversationId: v.optional(v.id("conversations")),
   },
   handler: async (ctx, args): Promise<string> => {
     const userId = await getAuthUserId(ctx);
@@ -82,6 +183,7 @@ export const getMedicineInfo = action({
     const thinkingId = await ctx.runMutation(api.medibot.addThinkingMessage, {
       medicine: args.medicine,
       quickAction: args.quickAction,
+      conversationId: args.conversationId,
     });
 
     // Graceful fallback when OpenAI API key is not configured
@@ -91,8 +193,12 @@ export const getMedicineInfo = action({
       await ctx.runMutation(api.medibot.updateThinkingMessage, {
         messageId: thinkingId,
         thinking: "Configuration missing: OPENAI_API_KEY",
+        conversationId: args.conversationId,
       });
-      await ctx.runMutation(api.medibot.addAIResponse, { content: msg });
+      await ctx.runMutation(api.medibot.addAIResponse, { 
+        content: msg,
+        conversationId: args.conversationId,
+      });
       return msg;
     }
 
@@ -180,12 +286,14 @@ Spelling and normalization rules:
         await ctx.runMutation(api.medibot.updateThinkingMessage, {
           messageId: thinkingId,
           thinking: thinking,
+          conversationId: args.conversationId,
         });
       }
 
       // Add the main AI response
       await ctx.runMutation(api.medibot.addAIResponse, {
         content: mainResponse,
+        conversationId: args.conversationId,
       });
 
       return mainResponse;
@@ -196,6 +304,7 @@ Spelling and normalization rules:
       await ctx.runMutation(api.medibot.updateThinkingMessage, {
         messageId: thinkingId,
         thinking: "I'm having trouble processing this request right now...",
+        conversationId: args.conversationId,
       });
       // Fallback: try local Python backend for a response
       type EnhancedResponse = { response?: string; thinking?: string; confidence?: number } | null;
@@ -209,10 +318,12 @@ Spelling and normalization rules:
             await ctx.runMutation(api.medibot.updateThinkingMessage, {
               messageId: thinkingId,
               thinking: enhanced.thinking,
+              conversationId: args.conversationId,
             });
           }
           await ctx.runMutation(api.medibot.addAIResponse, {
             content: enhanced.response,
+            conversationId: args.conversationId,
           });
           return enhanced.response;
         }
@@ -223,6 +334,7 @@ Spelling and normalization rules:
       const errorResponse = "I'm sorry, I'm having trouble processing your request right now. Please try again in a moment.";
       await ctx.runMutation(api.medibot.addAIResponse, {
         content: errorResponse,
+        conversationId: args.conversationId,
       });
       
       return errorResponse;
@@ -234,6 +346,7 @@ Spelling and normalization rules:
 export const generalChat = action({
   args: {
     message: v.string(),
+    conversationId: v.optional(v.id("conversations")),
   },
   handler: async (ctx, args): Promise<string> => {
     const userId = await getAuthUserId(ctx);
@@ -243,11 +356,16 @@ export const generalChat = action({
     if (!openaiApiKey) {
       const msg =
         "OpenAI API key is not configured. Please set `OPENAI_API_KEY` in `.env.local` and restart the dev servers.";
-      await ctx.runMutation(api.medibot.addAIResponse, { content: msg });
+      await ctx.runMutation(api.medibot.addAIResponse, { 
+        content: msg,
+        conversationId: args.conversationId,
+      });
       return msg;
     }
 
-    const conversation = await ctx.runQuery(api.medibot.getConversation, {});
+    const conversation = await ctx.runQuery(api.medibot.getConversation, {
+      conversationId: args.conversationId,
+    });
 
     // Build history excluding thinking messages
     const history: { role: "user" | "assistant"; content: string }[] = [];
@@ -277,6 +395,7 @@ For medical questions: be cautious, avoid prescribing, give general info, and in
 
       await ctx.runMutation(api.medibot.addAIResponse, {
         content,
+        conversationId: args.conversationId,
       });
 
       return content;
@@ -292,6 +411,7 @@ For medical questions: be cautious, avoid prescribing, give general info, and in
 
       await ctx.runMutation(api.medibot.addAIResponse, {
         content: errorResponse,
+        conversationId: args.conversationId,
       });
       return errorResponse;
     }
@@ -302,15 +422,26 @@ export const addThinkingMessage = mutation({
   args: {
     medicine: v.string(),
     quickAction: v.optional(v.string()),
+    conversationId: v.optional(v.id("conversations")),
   },
   handler: async (ctx, args) => {
     const userId = await getAuthUserId(ctx);
     if (!userId) throw new Error("Not authenticated");
 
-    const conversation = await ctx.db
-      .query("conversations")
-      .withIndex("by_user", (q) => q.eq("userId", userId))
-      .first();
+    let conversation: any = null;
+
+    if (args.conversationId) {
+      conversation = await ctx.db.get(args.conversationId);
+      if (!conversation || conversation.userId !== userId) {
+        throw new Error("Conversation not found");
+      }
+    } else {
+      conversation = await ctx.db
+        .query("conversations")
+        .withIndex("by_user_updated", (q) => q.eq("userId", userId))
+        .order("desc")
+        .first();
+    }
 
     if (conversation) {
       const thinkingId = crypto.randomUUID();
@@ -325,6 +456,7 @@ export const addThinkingMessage = mutation({
       const updatedMessages = [...conversation.messages, thinkingMessage];
       await ctx.db.patch(conversation._id, {
         messages: updatedMessages,
+        updatedAt: Date.now(),
       });
 
       return thinkingId;
@@ -338,25 +470,37 @@ export const updateThinkingMessage = mutation({
   args: {
     messageId: v.string(),
     thinking: v.string(),
+    conversationId: v.optional(v.id("conversations")),
   },
   handler: async (ctx, args) => {
     const userId = await getAuthUserId(ctx);
     if (!userId) throw new Error("Not authenticated");
 
-    const conversation = await ctx.db
-      .query("conversations")
-      .withIndex("by_user", (q) => q.eq("userId", userId))
-      .first();
+    let conversation: any = null;
+
+    if (args.conversationId) {
+      conversation = await ctx.db.get(args.conversationId);
+      if (!conversation || conversation.userId !== userId) {
+        throw new Error("Conversation not found");
+      }
+    } else {
+      conversation = await ctx.db
+        .query("conversations")
+        .withIndex("by_user_updated", (q) => q.eq("userId", userId))
+        .order("desc")
+        .first();
+    }
 
     if (conversation) {
-      const updatedMessages = conversation.messages.map(msg => 
-        msg.id === args.messageId 
+      const updatedMessages = conversation.messages.map((msg: any) =>
+        msg.id === args.messageId
           ? { ...msg, content: args.thinking, isComplete: true }
           : msg
       );
-      
+
       await ctx.db.patch(conversation._id, {
         messages: updatedMessages,
+        updatedAt: Date.now(),
       });
     }
   },
@@ -365,15 +509,26 @@ export const updateThinkingMessage = mutation({
 export const addAIResponse = mutation({
   args: {
     content: v.string(),
+    conversationId: v.optional(v.id("conversations")),
   },
   handler: async (ctx, args) => {
     const userId = await getAuthUserId(ctx);
     if (!userId) throw new Error("Not authenticated");
 
-    const conversation = await ctx.db
-      .query("conversations")
-      .withIndex("by_user", (q) => q.eq("userId", userId))
-      .first();
+    let conversation: any = null;
+
+    if (args.conversationId) {
+      conversation = await ctx.db.get(args.conversationId);
+      if (!conversation || conversation.userId !== userId) {
+        throw new Error("Conversation not found");
+      }
+    } else {
+      conversation = await ctx.db
+        .query("conversations")
+        .withIndex("by_user_updated", (q) => q.eq("userId", userId))
+        .order("desc")
+        .first();
+    }
 
     if (conversation) {
       const aiMessage = {
@@ -386,25 +541,39 @@ export const addAIResponse = mutation({
       const updatedMessages = [...conversation.messages, aiMessage];
       await ctx.db.patch(conversation._id, {
         messages: updatedMessages,
+        updatedAt: Date.now(),
       });
     }
   },
 });
 
 export const clearConversation = mutation({
-  args: {},
-  handler: async (ctx) => {
+  args: {
+    conversationId: v.optional(v.id("conversations")),
+  },
+  handler: async (ctx, args) => {
     const userId = await getAuthUserId(ctx);
     if (!userId) throw new Error("Not authenticated");
 
-    const conversation = await ctx.db
-      .query("conversations")
-      .withIndex("by_user", (q) => q.eq("userId", userId))
-      .first();
+    let conversation: any = null;
+
+    if (args.conversationId) {
+      conversation = await ctx.db.get(args.conversationId);
+      if (!conversation || conversation.userId !== userId) {
+        throw new Error("Conversation not found");
+      }
+    } else {
+      conversation = await ctx.db
+        .query("conversations")
+        .withIndex("by_user_updated", (q) => q.eq("userId", userId))
+        .order("desc")
+        .first();
+    }
 
     if (conversation) {
       await ctx.db.patch(conversation._id, {
         messages: [],
+        updatedAt: Date.now(),
       });
     }
   },

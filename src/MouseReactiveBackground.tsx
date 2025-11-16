@@ -30,70 +30,30 @@ export function MouseReactiveBackground({ className = '' }: MouseReactiveBackgro
   return (
     <div
       ref={containerRef}
-      className={`fixed inset-0 -z-10 overflow-hidden ${className}`}
+      className={`fixed inset-0 overflow-hidden ${className}`}
       style={{
         background: `radial-gradient(circle at ${mousePosition.x}% ${mousePosition.y}%, 
-          rgba(59, 130, 246, 0.2) 0%, 
-          rgba(147, 51, 234, 0.15) 30%, 
-          rgba(99, 102, 241, 0.1) 60%, 
+          rgba(59, 130, 246, 0.08) 0%, 
+          rgba(147, 51, 234, 0.04) 30%, 
+          rgba(99, 102, 241, 0.02) 60%, 
           transparent 100%)`,
-        transition: 'background 0.2s ease-out',
+        transition: 'background 0.3s ease-out',
+        pointerEvents: 'none',
+        zIndex: 0,
+        position: 'fixed',
       }}
+      aria-hidden="true"
     >
-      {/* Animated gradient orbs with more reactivity */}
+      {/* Simple grid pattern overlay */}
       <div
-        className="absolute inset-0 opacity-40"
-        style={{
-          background: `radial-gradient(circle at ${mousePosition.x}% ${mousePosition.y}%, 
-            rgba(59, 130, 246, 0.3) 0%, 
-            transparent 60%)`,
-          transform: `translate(${(mousePosition.x - 50) * 0.15}px, ${(mousePosition.y - 50) * 0.15}px) scale(${1 + (mousePosition.x - 50) * 0.001})`,
-          transition: 'transform 0.3s cubic-bezier(0.4, 0, 0.2, 1), background 0.2s ease-out',
-        }}
-      />
-      <div
-        className="absolute inset-0 opacity-30"
-        style={{
-          background: `radial-gradient(circle at ${100 - mousePosition.x}% ${100 - mousePosition.y}%, 
-            rgba(147, 51, 234, 0.3) 0%, 
-            transparent 60%)`,
-          transform: `translate(${(50 - mousePosition.x) * 0.15}px, ${(50 - mousePosition.y) * 0.15}px) scale(${1 + (mousePosition.y - 50) * 0.001})`,
-          transition: 'transform 0.3s cubic-bezier(0.4, 0, 0.2, 1), background 0.2s ease-out',
-        }}
-      />
-      <div
-        className="absolute inset-0 opacity-20"
-        style={{
-          background: `radial-gradient(circle at ${50 + (mousePosition.x - 50) * 0.5}% ${50 + (mousePosition.y - 50) * 0.5}%, 
-            rgba(99, 102, 241, 0.25) 0%, 
-            transparent 70%)`,
-          transform: `translate(${(mousePosition.x - 50) * 0.08}px, ${(mousePosition.y - 50) * 0.08}px)`,
-          transition: 'transform 0.4s cubic-bezier(0.4, 0, 0.2, 1), background 0.2s ease-out',
-        }}
-      />
-      
-      {/* Interactive Grid pattern overlay */}
-      <div
-        className="absolute inset-0 opacity-[0.04] dark:opacity-[0.06]"
+        className="absolute inset-0 opacity-[0.02] dark:opacity-[0.03]"
         style={{
           backgroundImage: `
             linear-gradient(rgba(0, 0, 0, 0.1) 1px, transparent 1px),
             linear-gradient(90deg, rgba(0, 0, 0, 0.1) 1px, transparent 1px)
           `,
           backgroundSize: '50px 50px',
-          transform: `translate(${(mousePosition.x - 50) * 0.08}px, ${(mousePosition.y - 50) * 0.08}px) rotate(${(mousePosition.x - 50) * 0.01}deg)`,
-          transition: 'transform 0.6s cubic-bezier(0.4, 0, 0.2, 1)',
-        }}
-      />
-      
-      {/* Animated particles effect */}
-      <div
-        className="absolute inset-0 opacity-10"
-        style={{
-          background: `radial-gradient(2px 2px at ${mousePosition.x}% ${mousePosition.y}%, rgba(59, 130, 246, 0.5), transparent),
-                       radial-gradient(2px 2px at ${100 - mousePosition.x}% ${100 - mousePosition.y}%, rgba(147, 51, 234, 0.5), transparent)`,
-          backgroundSize: '100% 100%',
-          transition: 'background 0.2s ease-out',
+          pointerEvents: 'none',
         }}
       />
     </div>

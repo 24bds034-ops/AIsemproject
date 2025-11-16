@@ -1,6 +1,7 @@
 import { useState, useRef, useEffect } from "react";
 import { useMutation, useQuery, useAction } from "convex/react";
 import { api } from "../convex/_generated/api";
+import { Id } from "../convex/_generated/dataModel";
 
 interface Message {
   id: string;
@@ -10,13 +11,18 @@ interface Message {
   isComplete?: boolean;
 }
 
-export function MediBot() {
+interface MediBotProps {
+  conversationId: Id<"conversations"> | null;
+  onConversationChange?: (id: Id<"conversations">) => void;
+}
+
+export function MediBot({ conversationId, onConversationChange }: MediBotProps) {
   const [input, setInput] = useState("");
   const [isLoading, setIsLoading] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const [currentMedicine, setCurrentMedicine] = useState<string | null>(null);
   
-  const conversation = useQuery(api.medibot.getConversation);
+  const conversation = useQuery(api.medibot.getConversation, { conversationId: conversationId || undefined });
   const sendMessage = useMutation(api.medibot.sendMessage);
   const getMedicineInfo = useAction(api.medibot.getMedicineInfo);
   const clearConversation = useMutation(api.medibot.clearConversation);
@@ -73,13 +79,17 @@ export function MediBot() {
     setIsLoading(true);
 
     try {
-      await sendMessage({ content: userInput });
+      const result = await sendMessage({ content: userInput, conversationId: conversationId || undefined });
+      const activeConversationId = result?.conversationId || conversationId;
+      if (result?.conversationId && onConversationChange) {
+        onConversationChange(result.conversationId);
+      }
       const qa = detectQuickAction(userInput);
       if (qa && currentMedicine) {
-        await getMedicineInfo({ medicine: currentMedicine, quickAction: qa });
+        await getMedicineInfo({ medicine: currentMedicine, quickAction: qa, conversationId: activeConversationId });
       } else {
         // Route all queries through medicine flow to restore original behavior
-        await getMedicineInfo({ medicine: userInput });
+        await getMedicineInfo({ medicine: userInput, conversationId: activeConversationId });
         setCurrentMedicine(userInput);
       }
     } catch (error) {
@@ -96,10 +106,15 @@ export function MediBot() {
 
     try {
       const med = currentMedicine || _medicine;
-      await sendMessage({ content: `${action} for ${med}` });
+      const result = await sendMessage({ content: `${action} for ${med}`, conversationId: conversationId || undefined });
+      const activeConversationId = result?.conversationId || conversationId;
+      if (result?.conversationId && onConversationChange) {
+        onConversationChange(result.conversationId);
+      }
       await getMedicineInfo({ 
         medicine: med, 
-        quickAction: action 
+        quickAction: action,
+        conversationId: activeConversationId,
       });
     } catch (error) {
       console.error("Error:", error);
@@ -182,7 +197,7 @@ export function MediBot() {
             </div>
           </div>
           <button
-            onClick={() => clearConversation()}
+            onClick={() => clearConversation({ conversationId: conversationId || undefined })}
             className="px-4 py-2 bg-white/10 hover:bg-white/20 rounded-lg transition-all duration-300 text-sm font-medium border border-white/20 hover:border-white/30 hover:scale-105 active:scale-95 transform"
           >
             Clear Chat
